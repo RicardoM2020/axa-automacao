@@ -1,0 +1,10 @@
+.env
+token.pickle
+oauth_credentials.json
+output/
+uploads/
+__pycache__/
+*.pyc
+.playwright/
+desktop.ini
+*/desktop.ini
