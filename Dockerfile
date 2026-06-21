@@ -11,4 +11,4 @@ RUN mkdir -p uploads output
 
 ENV PORT=8080
 
-CMD ["gunicorn", "app:app", "--workers", "2", "--timeout", "300", "--bind", "0.0.0.0:8080"]
+CMD gunicorn app:app --workers 2 --timeout 300 --bind 0.0.0.0:$PORT
