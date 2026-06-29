@@ -108,10 +108,11 @@ def _processar(job_id: str, csv_path: Path, lote_atual: str, lote_numero: int, s
         _log(f"TOTAL GERAL:       R$ {total_i + total_d:,.2f}")
 
         _log("Gerando arquivos Excel...")
-        caminho_lote, caminho_conf = exportar_excel(df_lote, df_processado, df_hist if not df_hist.empty else None)
+        caminho_lote, caminho_conf, caminho_fatura = exportar_excel(df_lote, df_processado, df_hist if not df_hist.empty else None)
 
-        job["lote_path"] = str(caminho_lote)
-        job["conf_path"] = str(caminho_conf)
+        job["lote_path"]   = str(caminho_lote)
+        job["conf_path"]   = str(caminho_conf)
+        job["fatura_path"] = str(caminho_fatura)
         job["resumo"] = {
             "lote":        n_lote,
             "excluidos":   n_excluido,
@@ -169,7 +170,7 @@ def processar():
     csv_path = UPLOAD_DIR / f"{job_id}.csv"
     arquivo.save(str(csv_path))
 
-    JOBS[job_id] = {"status": "processando", "log": [], "lote_path": None, "conf_path": None}
+    JOBS[job_id] = {"status": "processando", "log": [], "lote_path": None, "conf_path": None, "fatura_path": None}
 
     thread = threading.Thread(
         target=_processar,
@@ -190,8 +191,9 @@ def status(job_id):
         "status":   job["status"],
         "log":      job["log"],
         "resumo":   job.get("resumo"),
-        "tem_lote": bool(job.get("lote_path")),
-        "tem_conf": bool(job.get("conf_path")),
+        "tem_lote":   bool(job.get("lote_path")),
+        "tem_conf":   bool(job.get("conf_path")),
+        "tem_fatura": bool(job.get("fatura_path")),
     })
 
 
@@ -206,6 +208,9 @@ def download(job_id, tipo):
         return send_file(str(path), as_attachment=True, download_name=path.name)
     elif tipo == "conferencia" and job.get("conf_path"):
         path = Path(job["conf_path"])
+        return send_file(str(path), as_attachment=True, download_name=path.name)
+    elif tipo == "fatura" and job.get("fatura_path"):
+        path = Path(job["fatura_path"])
         return send_file(str(path), as_attachment=True, download_name=path.name)
 
     return "Arquivo nao disponivel.", 404

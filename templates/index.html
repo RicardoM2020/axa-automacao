@@ -306,6 +306,14 @@
 
     .btn-conf:hover { background: #dcfce7; }
 
+    .btn-fatura {
+      background: #fefce8;
+      color: #854d0e;
+      border: 1.5px solid #fde68a;
+    }
+
+    .btn-fatura:hover { background: #fef9c3; }
+
     .btn-novo {
       margin-top: 8px;
       background: none;
@@ -502,6 +510,9 @@
         </a>
         <a class="btn-download btn-conf" href="/download/${currentJobId}/conferencia">
           ⬇ Baixar Relatório de Conferência (.xlsx)
+        </a>
+        <a class="btn-download btn-fatura" href="/download/${currentJobId}/fatura">
+          ⬇ Baixar Fatura Única (.xlsx)
         </a>
       `;
     }

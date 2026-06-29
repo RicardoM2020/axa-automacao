@@ -657,7 +657,183 @@ def exportar_excel(df_lote: pd.DataFrame, df_completo: pd.DataFrame, df_hist: pd
         _gerar_resumo(df_completo, writer, df_hist)
 
     print(f"[Export] Conferência salva: {caminho_conf}")
-    return caminho_lote, caminho_conf
+
+    # --- Fatura Única ---
+    caminho_fatura = OUTPUT_DIR / f"FaturaUnica_{data_hoje}_{LOTE_ATUAL.replace(' ', '_')}.xlsx"
+    gerar_fatura_unica(df_lote, caminho_fatura)
+
+    return caminho_lote, caminho_conf, caminho_fatura
+
+
+# ---------------------------------------------------------------------------
+# Fatura Única
+# ---------------------------------------------------------------------------
+
+_COD_TIPO_OPERACAO   = {"Indenização": 1, "Honorários": 5, "Despesas": 6}
+_COD_FORMA_PAGAMENTO = {"Total": 0, "Parcial": 1}
+_COD_TIPO_LIQUIDACAO = {"Crédito em Conta": 1, "Bordero": 6}
+_COD_COBERTURA = {
+    "Quebra Acidental": 2698,
+    "Roubo e Furto Qualificado": 2805,
+    "Extensão da Garantia Original": 2353,
+    "Derramamento de Líquido": 2221,
+    "Danos elétricos": 2198,
+}
+_COD_CONTATO = {"Seguradora": 42}
+
+_COBERTURA_DEPARA_FATURA = {
+    "Roubo e Furto": "Roubo e Furto Qualificado",
+    "Roubo ou Furto Qualificado": "Roubo e Furto Qualificado",
+}
+
+_HEADERS_FATURA = [
+    "Nr Aviso", "Nr Sinistro", "CPF/CNPJ", "Valor", "Tipo da Cobertura",
+    "Tipo Operação", "Tipo Liquidação", "Forma Pagamento", "Nº ISJ",
+    "Nº Nota Fiscal", "Data Emissão Nota Fiscal", "Descrição", "Ex Gratia",
+    "Tipo Contato", "Cod Tipo Operação", "Cod Forma Pagamento",
+    "Cod Tipo Liquidação", "Cod Cobertura", "Cod Contato",
+    "Validate", "Estado Pagamento (não preencher)", "Descrição de Erros (não preencher)",
+]
+
+
+def gerar_fatura_unica(df_lote: pd.DataFrame, caminho: Path):
+    """Gera o arquivo Fatura Única no formato exigido pela AXA (uma linha por tipo de cobrança)."""
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment
+
+    col_sinistro   = _encontrar_coluna_fuzzy(df_lote, ["Sinistro AXA"])
+    col_cpf        = _encontrar_coluna_fuzzy(df_lote, ["CPF"])
+    col_cobertura  = _encontrar_coluna_fuzzy(df_lote, ["Cobertura de Seguro", "cobertura"])
+    col_finalizacao= _encontrar_coluna_fuzzy(df_lote, ["Tipo de Finalização", "Tipo de Finalizacao"])
+    col_os         = _encontrar_coluna_fuzzy(df_lote, ["OS Interna PLL", "OS Interna"])
+
+    def _limpar(v):
+        return str(v or "").strip().strip("`")
+
+    rows = []
+    for _, row in df_lote.iterrows():
+        os_interna  = _limpar(row.get(col_os, "") if col_os else "")
+        sinistro    = _limpar(row.get(col_sinistro, "") if col_sinistro else "")
+        cpf         = _limpar(row.get(col_cpf, "") if col_cpf else "")
+        cob_raw     = _limpar(row.get(col_cobertura, "") if col_cobertura else "")
+        cobertura   = _COBERTURA_DEPARA_FATURA.get(cob_raw, cob_raw)
+        finalizacao = _limpar(row.get(col_finalizacao, "") if col_finalizacao else "")
+
+        incluir_desp  = bool(row.get("incluir_despesa", False))
+        incluir_inden = bool(row.get("incluir_indenizacao", False))
+        val_desp      = float(row.get("valor_despesa_correto", 0) or 0)
+        val_inden     = float(row.get("valor_indenizacao_correto", 0) or 0)
+
+        cod_cob  = _COD_COBERTURA.get(cobertura, "")
+        cod_cont = _COD_CONTATO.get("Seguradora", 42)
+        cod_fp   = _COD_FORMA_PAGAMENTO.get("Total", 0)
+        cod_liq  = _COD_TIPO_LIQUIDACAO.get("Crédito em Conta", 1)
+
+        def _linha(tipo_op, valor, row_num):
+            # Colunas de fórmula usam referências à própria linha e à aba Aux
+            f_cod_op  = f'=IFERROR(VLOOKUP(F{row_num},Aux!$A$2:$B$8,2,FALSE),"")'
+            f_cod_fp  = f'=IFERROR(VLOOKUP(H{row_num},Aux!$D$2:$E$3,2,FALSE),"")'
+            f_cod_liq = f'=IFERROR(VLOOKUP(G{row_num},Aux!$D$8:$E$9,2,FALSE),"")'
+            f_cod_cob = f'=IFERROR(VLOOKUP(E{row_num},Aux!$J$2:$K$18,2,FALSE),"")'
+            f_cod_cont= f'=IFERROR(VLOOKUP(N{row_num},Aux!$S$3:$T$31,2,FALSE),"")'
+            f_validate= (
+                f'=IFERROR(IF(AND(IF(AND(OR(LEN(A{row_num})>0,LEN(B{row_num})>0),'
+                f'OR(LEN(C{row_num})>10,LEN(C{row_num})>10),D{row_num}>0,'
+                f'AND(O{row_num}>0,NOT(O{row_num}="")),AND(P{row_num}>=0,NOT(P{row_num}="")),'
+                f'LEN(Q{row_num})>0),1,0)=0,NOT(LEN(O{row_num})>0),NOT(LEN(P{row_num})>0),'
+                f'NOT(LEN(Q{row_num})>0)),"",IF(AND(OR(LEN(A{row_num})>0,LEN(B{row_num})>0),'
+                f'LEN(C{row_num})>10,(LEN(D{row_num})>0),D{row_num}>0,(LEN(O{row_num})>0),'
+                f'O{row_num}>0,(LEN(P{row_num})>0),P{row_num}>=0,LEN(Q{row_num})>0,'
+                f'Q{row_num}>0,IF(AND(O{row_num}=5,NOT(LEN(J{row_num})>0)),0,1)),1,0)),"")'
+            )
+            return [
+                os_interna, sinistro, cpf, valor, cobertura,
+                tipo_op, "Crédito em Conta", "Total", None,
+                None, None, finalizacao, 1,
+                "Seguradora", f_cod_op, f_cod_fp, f_cod_liq, f_cod_cob, f_cod_cont,
+                f_validate, None, None,
+            ]
+
+        if incluir_desp and val_desp > 0:
+            rows.append(_linha("Despesas", val_desp, len(rows) + 2))
+        if incluir_inden and val_inden > 0:
+            rows.append(_linha("Indenização", val_inden, len(rows) + 2))
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Fatura Unica"
+
+    # Cabeçalho
+    ws.append(_HEADERS_FATURA)
+    header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+    header_font = Font(bold=True, color="FFFFFF")
+    for cell in ws[1]:
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", wrap_text=True)
+
+    # Dados
+    for r in rows:
+        ws.append(r)
+
+    # Largura automática
+    for col_cells in ws.columns:
+        max_len = max((len(str(c.value or "")) for c in col_cells), default=10)
+        ws.column_dimensions[col_cells[0].column_letter].width = min(max_len + 2, 35)
+    ws.row_dimensions[1].height = 30
+
+    # Aba Aux (tabelas de referência usadas no modelo AXA)
+    ws_aux = wb.create_sheet("Aux")
+    _criar_aux_fatura(ws_aux)
+
+    wb.save(str(caminho))
+    print(f"[Fatura] Fatura Unica salva: {caminho} ({len(rows)} linhas)")
+
+
+def _criar_aux_fatura(ws):
+    """Popula a aba Aux com as tabelas de referência da Fatura Única."""
+    # Tipo Operação (col A:B)
+    ws["A1"] = "Transacao Financeira Tipo"
+    dados_op = [("Indenização", 1), ("Honorários", 5), ("Despesas", 6)]
+    for i, (nome, cod) in enumerate(dados_op, 2):
+        ws.cell(row=i, column=1, value=nome)
+        ws.cell(row=i, column=2, value=cod)
+
+    # Forma Pagamento / Tipo Liquidação (col D:E)
+    ws["D1"] = "Forma Pagamento"
+    for i, (nome, cod) in enumerate([("Parcial", 1), ("Total", 0)], 2):
+        ws.cell(row=i, column=4, value=nome)
+        ws.cell(row=i, column=5, value=cod)
+    ws["D7"] = "Tipo Liquidacao"
+    for i, (nome, cod) in enumerate([("Crédito em Conta", 1), ("Bordero", 6)], 8):
+        ws.cell(row=i, column=4, value=nome)
+        ws.cell(row=i, column=5, value=cod)
+
+    # Tipo Cobertura (col J:K)
+    ws["J1"] = "Tipo Cobertura"
+    coberturas = [
+        ("Derramamento de Líquido", 2221), ("Extensão da Garantia Original", 2353),
+        ("Quebra Acidental", 2698), ("Roubo e Furto Qualificado", 2805), ("Danos elétricos", 2198),
+    ]
+    for i, (nome, cod) in enumerate(coberturas, 2):
+        ws.cell(row=i, column=10, value=nome)
+        ws.cell(row=i, column=11, value=cod)
+
+    # Tipo Contato (col S:T)
+    ws["S2"] = "Contato Tipo"
+    contatos = [
+        ("Advogado", 21), ("Agente", 23), ("Assessoria", 47), ("Banco", 49),
+        ("Beneficiarios", 19), ("Congenere", 44), ("Corretor", 27), ("Estipulante", 48),
+        ("Fiador", 25), ("Investigadores", 14), ("Laboratorio", 24), ("Leiloeiro", 36),
+        ("Medico", 43), ("Pagador", 26), ("PeritoAviacao", 32), ("PeritoConstrucao", 33),
+        ("PeritoEngenharia", 30), ("PeritoOutros", 35), ("PeritoPatrimoniais", 29),
+        ("PeritoRCivil", 31), ("PeritoTransportes", 34), ("Prolaborista", 28),
+        ("Ressegurador", 39), ("Segurado", 7), ("Seguradora", 42),
+        ("Subestipulante", 38), ("Testemunha", 5), ("Tomador", 1),
+    ]
+    for i, (nome, cod) in enumerate(contatos, 3):
+        ws.cell(row=i, column=19, value=nome)
+        ws.cell(row=i, column=20, value=cod)
 
 
 def _formatar_excel(writer, sheet_name: str):
